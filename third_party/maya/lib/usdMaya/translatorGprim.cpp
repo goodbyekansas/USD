@@ -60,8 +60,18 @@ UsdMayaTranslatorGprim::Write(
 
     bool doubleSided = false;
     if (UsdMayaUtil::getPlugValue(depFn, "doubleSided", &doubleSided)){
-        if(!gprim.GetDoubleSidedAttr().HasAuthoredValue()){
-            gprim.CreateDoubleSidedAttr(VtValue(doubleSided), true);
+        UsdAttribute doubleSideAttr = gprim.GetDoubleSidedAttr();
+        VtValue val = VtValue(doubleSided);
+        bool createAttr = true;
+        if(doubleSideAttr) {
+            bool primDoubleSided;
+            doubleSideAttr.Get(&primDoubleSided);
+            if(primDoubleSided == doubleSided && doubleSideAttr.HasAuthoredValue()) {
+                createAttr = false;
+            }
+        }
+        if(createAttr) {
+            gprim.CreateDoubleSidedAttr(val, true);
         }
     }
 
@@ -71,7 +81,17 @@ UsdMayaTranslatorGprim::Write(
         // If mesh is double sided in maya, opposite is disregarded
         TfToken orientation = (opposite && !doubleSided ? UsdGeomTokens->leftHanded :
                                                           UsdGeomTokens->rightHanded);
-        if(!gprim.GetOrientationAttr().HasAuthoredValue()){
+        UsdAttribute orientationAttr = gprim.GetOrientationAttr();
+        TfToken primOrientation;
+        bool createAttr = true;
+        if(orientationAttr) {
+            TfToken primOrientation;
+            orientationAttr.Get(&primOrientation);
+            if(primOrientation == orientation && orientationAttr.HasAuthoredValue()) {
+                createAttr = false;
+            }
+        }
+        if(createAttr) {
             gprim.CreateOrientationAttr(VtValue(orientation), true);
         }
     }

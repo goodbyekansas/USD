@@ -153,9 +153,7 @@ UsdMaya_InstancedNodeWriter::UsdMaya_InstancedNodeWriter(
 
     _usdPrim.GetReferences().AddReference(
         SdfReference(std::string(), referencePath));
-    //if(!_usdPrim.HasAuthoredInstanceable()) {
-        _usdPrim.SetInstanceable(true);
-    //}
+    _usdPrim.SetInstanceable(true);
 
     // Get the Maya DAG path corresponding to our "instance master" root.
     // We used the 0th instance to write out the USD instance master.
