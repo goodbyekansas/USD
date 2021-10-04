@@ -376,7 +376,7 @@ def RunCMake(context, force, extraArgs = None):
             '{toolset} '
             '{extraArgs} '
             '"{srcDir}"'
-            .format(cmake=os.environ.get("CMAKE","cmake3")),
+            .format(cmake=os.environ.get("CMAKE","cmake3"),
                     instDir=instDir,
                     depsInstDir=context.instDir,
                     config=config,
