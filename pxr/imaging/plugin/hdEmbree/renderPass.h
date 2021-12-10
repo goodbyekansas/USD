@@ -21,25 +21,23 @@
 // KIND, either express or implied. See the Apache License for the specific
 // language governing permissions and limitations under the Apache License.
 //
-#ifndef HDEMBREE_RENDER_PASS_H
-#define HDEMBREE_RENDER_PASS_H
+#ifndef PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_PASS_H
+#define PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_PASS_H
 
 #include "pxr/pxr.h"
 
 #include "pxr/imaging/hd/aov.h"
 #include "pxr/imaging/hd/renderPass.h"
 #include "pxr/imaging/hd/renderThread.h"
-#include "pxr/imaging/hdEmbree/renderer.h"
-#include "pxr/imaging/hdEmbree/renderBuffer.h"
-#include "pxr/imaging/hdx/compositor.h"
+#include "pxr/imaging/plugin/hdEmbree/renderer.h"
+#include "pxr/imaging/plugin/hdEmbree/renderBuffer.h"
 
 #include "pxr/base/gf/matrix4d.h"
+#include "pxr/base/gf/rect2i.h"
 
 #include <atomic>
 
 PXR_NAMESPACE_OPEN_SCOPE
-
-typedef boost::shared_ptr<class GlfGLContext> GlfGLContextSharedPtr;
 
 /// \class HdEmbreeRenderPass
 ///
@@ -49,7 +47,8 @@ typedef boost::shared_ptr<class GlfGLContext> GlfGLContextSharedPtr;
 ///
 /// This class does so by raycasting into the embree scene via HdEmbreeRenderer.
 ///
-class HdEmbreeRenderPass final : public HdRenderPass {
+class HdEmbreeRenderPass final : public HdRenderPass
+{
 public:
     /// Renderpass constructor.
     ///   \param index The render index containing scene data to render.
@@ -63,14 +62,14 @@ public:
                        std::atomic<int> *sceneVersion);
 
     /// Renderpass destructor.
-    virtual ~HdEmbreeRenderPass();
+    ~HdEmbreeRenderPass() override;
 
     // -----------------------------------------------------------------------
     // HdRenderPass API
 
     /// Determine whether the sample buffer has enough samples.
     ///   \return True if the image has enough samples to be considered final.
-    virtual bool IsConverged() const override;
+    bool IsConverged() const override;
 
 protected:
 
@@ -81,11 +80,11 @@ protected:
     ///   \param renderPassState Input parameters (including viewer parameters)
     ///                          for this renderpass.
     ///   \param renderTags Which rendertags should be drawn this pass.
-    virtual void _Execute(HdRenderPassStateSharedPtr const& renderPassState,
-                          TfTokenVector const &renderTags) override;
+    void _Execute(HdRenderPassStateSharedPtr const& renderPassState,
+                  TfTokenVector const &renderTags) override;
 
     /// Update internal tracking to reflect a dirty collection.
-    virtual void _MarkCollectionDirty() override {}
+    void _MarkCollectionDirty() override {}
 
 private:
     // A handle to the render thread.
@@ -103,14 +102,14 @@ private:
     // The last settings version we rendered with.
     int _lastSettingsVersion;
 
-    // The width of the viewport we're rendering into.
-    unsigned int _width;
-    // The height of the viewport we're rendering into.
-    unsigned int _height;
+    // The pixels written to. Like viewport in OpenGL,
+    // but coordinates are y-Down.
+    GfRect2i _dataWindow;
 
     // The view matrix: world space to camera space
     GfMatrix4d _viewMatrix;
-    // The projection matrix: camera space to NDC space
+    // The projection matrix: camera space to NDC space (with
+    // respect to the data window).
     GfMatrix4d _projMatrix;
 
     // The list of aov buffers this renderpass should write to.
@@ -123,12 +122,8 @@ private:
 
     // Were the color/depth buffer converged the last time we blitted them?
     bool _converged;
-
-    // A compositor utility class, for rendering the final result to the
-    // viewport.
-    HdxCompositor _compositor;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-#endif // HDEMBREE_RENDER_PASS_H
+#endif // PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_PASS_H

@@ -21,8 +21,8 @@
 // KIND, either express or implied. See the Apache License for the specific
 // language governing permissions and limitations under the Apache License.
 //
-#ifndef USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H
-#define USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H
+#ifndef PXR_EXTRAS_USD_EXAMPLES_USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H
+#define PXR_EXTRAS_USD_EXAMPLES_USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H
 
 #include "pxr/pxr.h"
 #include "data.h"
@@ -47,11 +47,10 @@ PXR_NAMESPACE_OPEN_SCOPE
 class UsdDancingCubesExample_DataImpl
 {
 public:
+    UsdDancingCubesExample_DataImpl();
+
     UsdDancingCubesExample_DataImpl(
         const UsdDancingCubesExample_DataParams &params);
-
-    /// Returns true if the parameters produce no specs
-    bool IsEmpty() const;
 
     /// Generates the spec type for the path.
     SdfSpecType GetSpecType(const SdfPath &path) const;
@@ -148,4 +147,4 @@ private:
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-#endif // USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H
+#endif // PXR_EXTRAS_USD_EXAMPLES_USD_DANCING_CUBES_EXAMPLE_DATA_IMPL_H

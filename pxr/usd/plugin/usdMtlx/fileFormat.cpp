@@ -22,11 +22,13 @@
 // language governing permissions and limitations under the Apache License.
 //
 #include "pxr/pxr.h"
-#include "pxr/usd/usdMtlx/fileFormat.h"
-#include "pxr/usd/usdMtlx/reader.h"
+#include "pxr/usd/plugin/usdMtlx/fileFormat.h"
+#include "pxr/usd/plugin/usdMtlx/reader.h"
+#include "pxr/usd/plugin/usdMtlx/utils.h"
 #include "pxr/usd/usd/stage.h"
 #include "pxr/usd/usd/usdaFileFormat.h"
 #include "pxr/base/tf/pathUtils.h"
+#include "pxr/base/trace/trace.h"
 
 #include <MaterialXCore/Document.h>
 #include <MaterialXFormat/XmlIo.h>
@@ -43,10 +45,11 @@ bool
 _Read(UsdStagePtr stage, R&& reader)
 {
     try {
-        auto doc = mx::createDocument();
-        reader(doc);
-        UsdMtlxRead(doc, stage);
-        return true;
+        auto doc = reader();
+        if (doc) {
+            UsdMtlxRead(doc, stage);
+            return true;
+        }
     }
     catch (mx::ExceptionFoundCycle& x) {
         TF_RUNTIME_ERROR("MaterialX cycle found: %s\n", x.what());
@@ -56,6 +59,7 @@ _Read(UsdStagePtr stage, R&& reader)
         TF_RUNTIME_ERROR("MaterialX error: %s\n", x.what());
         return false;
     }
+    return false;
 }
 
 } // anonymous namespace
@@ -115,9 +119,9 @@ UsdMtlxFileFormat::Read(
     TRACE_FUNCTION();
 
     auto stage = UsdStage::CreateInMemory();
-    if (!_Read(stage,
-               [&resolvedPath](mx::DocumentPtr d) {
-                    mx::readFromXmlFile(d, resolvedPath);
+    if (!_Read(stage, 
+               [&resolvedPath]() { 
+                   return UsdMtlxReadDocument(resolvedPath);
                })) {
         return false;
     }
@@ -145,8 +149,10 @@ UsdMtlxFileFormat::ReadFromString(
 
     auto stage = UsdStage::CreateInMemory();
     if (!_Read(stage,
-               [&str](mx::DocumentPtr d) {
+               [&str]() {
+                    auto d = mx::createDocument();
                     mx::readFromXmlString(d, str);
+                    return d;
                })) {
         return false;
     }

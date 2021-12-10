@@ -22,7 +22,7 @@
 // language governing permissions and limitations under the Apache License.
 //
 #include "pxr/pxr.h"
-#include "pxr/usd/usdMtlx/utils.h"
+#include "pxr/usd/plugin/usdMtlx/utils.h"
 #include "pxr/usd/ndr/declare.h"
 #include "pxr/usd/ndr/discoveryPlugin.h"
 #include "pxr/usd/ndr/filesystemDiscoveryHelpers.h"
@@ -40,10 +40,7 @@ namespace {
 
 TF_DEFINE_PRIVATE_TOKENS(
     _tokens,
-
     ((discoveryType, "mtlx"))
-
-    ((defaultSourceType, "osl"))
 );
 
 // Maps a nodedef name to its NdrNode name.
@@ -125,15 +122,6 @@ _DiscoverNodes(
             continue;
         }
 
-        // Get the language.
-        auto language = impl->getLanguage();
-        if (language.empty()) {
-            language = _tokens->defaultSourceType.GetString();
-        }
-        std::transform(language.begin(), language.end(),
-                       language.begin(),
-                       [](char c) -> char { return std::toupper(c); });
-
         bool implicitDefault;
         result->emplace_back(
             NdrIdentifier(nodeDef->getName()),
@@ -141,7 +129,7 @@ _DiscoverNodes(
             _ChooseName(nodeDef->getName(), nameMapping),
             TfToken(nodeDef->getNodeString()),
             fileResult.discoveryType,
-            TfToken(language),
+            fileResult.sourceType,
             fileResult.uri,
             fileResult.resolvedUri,
             /* sourceCode */ "", 

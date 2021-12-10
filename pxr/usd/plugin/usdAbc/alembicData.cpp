@@ -24,10 +24,10 @@
 /// \file alembicData.cpp
 
 #include "pxr/pxr.h"
-#include "pxr/usd/usdAbc/alembicData.h"
-#include "pxr/usd/usdAbc/alembicReader.h"
-#include "pxr/usd/usdAbc/alembicUtil.h"
-#include "pxr/usd/usdAbc/alembicWriter.h"
+#include "pxr/usd/plugin/usdAbc/alembicData.h"
+#include "pxr/usd/plugin/usdAbc/alembicReader.h"
+#include "pxr/usd/plugin/usdAbc/alembicUtil.h"
+#include "pxr/usd/plugin/usdAbc/alembicWriter.h"
 #include "pxr/usd/sdf/schema.h"
 #include "pxr/base/trace/trace.h"
 #include "pxr/base/tf/envSetting.h"
@@ -94,9 +94,9 @@ using namespace UsdAbc_AlembicUtil;
 TF_DEFINE_ENV_SETTING(USD_ABC_EXPAND_INSTANCES, false,
                       "Force Alembic instances to be expanded.");
 TF_DEFINE_ENV_SETTING(USD_ABC_DISABLE_INSTANCING, false,
-                      "Disable instancing on masters created from Alembic.");
+                      "Disable instancing on prototypes created from Alembic.");
 TF_DEFINE_ENV_SETTING(USD_ABC_PARENT_INSTANCES, true,
-                      "Make parent of instance source into master where possible.");
+                      "Make parent of instance source into prototype where possible.");
 
 // The SdfAbstractData time samples type.
 // XXX: SdfAbstractData should typedef this.
@@ -108,9 +108,9 @@ typedef std::set<double> UsdAbc_TimeSamples;
 
 #define XXX_UNSUPPORTED(M) TF_RUNTIME_ERROR("Alembic file " #M "() not supported")
 
-UsdAbc_AlembicData::UsdAbc_AlembicData()
+UsdAbc_AlembicData::UsdAbc_AlembicData(SdfFileFormat::FileFormatArguments args)
+    : _arguments(std::move(args))
 {
-    // Do nothing
 }
 
 UsdAbc_AlembicData::~UsdAbc_AlembicData()
@@ -119,9 +119,9 @@ UsdAbc_AlembicData::~UsdAbc_AlembicData()
 }
 
 UsdAbc_AlembicDataRefPtr
-UsdAbc_AlembicData::New()
+UsdAbc_AlembicData::New(SdfFileFormat::FileFormatArguments args)
 {
-    return TfCreateRefPtr(new UsdAbc_AlembicData);
+    return TfCreateRefPtr(new UsdAbc_AlembicData(std::move(args)));
 }
 
 bool
@@ -136,11 +136,11 @@ UsdAbc_AlembicData::Open(const std::string& filePath)
     if (TfGetEnvSetting(USD_ABC_EXPAND_INSTANCES)) {
         _reader->SetFlag(UsdAbc_AlembicContextFlagNames->expandInstances);
     }
-    // Create instances but disallow instancing on the master.
+    // Create instances but disallow instancing on the prototype.
     if (TfGetEnvSetting(USD_ABC_DISABLE_INSTANCING)) {
         _reader->SetFlag(UsdAbc_AlembicContextFlagNames->disableInstancing);
     }
-    // Use the parent of instance sources as the Usd master prim, where
+    // Use the parent of instance sources as the Usd prototype prim, where
     // possible.
     if (TfGetEnvSetting(USD_ABC_PARENT_INSTANCES)) {
         _reader->SetFlag(UsdAbc_AlembicContextFlagNames->promoteInstances);
@@ -148,7 +148,7 @@ UsdAbc_AlembicData::Open(const std::string& filePath)
     //_reader->SetFlag(UsdAbc_AlembicContextFlagNames->verbose);
 
     // Open the archive.
-    if (_reader->Open(filePath)) {
+    if (_reader->Open(filePath, _arguments)) {
         return true;
     }
 

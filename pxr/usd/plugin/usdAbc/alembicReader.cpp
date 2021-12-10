@@ -24,8 +24,9 @@
 /// \file alembicReader.cpp
 
 #include "pxr/pxr.h"
-#include "pxr/usd/usdAbc/alembicReader.h"
-#include "pxr/usd/usdAbc/alembicUtil.h"
+#include "pxr/usd/plugin/usdAbc/alembicReader.h"
+#include "pxr/usd/plugin/usdAbc/alembicUtil.h"
+#include "pxr/usd/usdGeom/hermiteCurves.h"
 #include "pxr/usd/usdGeom/tokens.h"
 #include "pxr/usd/usdGeom/xformable.h"
 #include "pxr/usd/sdf/schema.h"
@@ -43,16 +44,7 @@
 #include <Alembic/Abc/ITypedArrayProperty.h>
 #include <Alembic/Abc/ITypedScalarProperty.h>
 #include <Alembic/AbcCoreAbstract/Foundation.h>
-
-#ifdef PXR_MULTIVERSE_SUPPORT_ENABLED
-#include <Alembic/AbcCoreGit/All.h>
-#endif // PXR_MULTIVERSE_SUPPORT_ENABLED
-
-#ifdef PXR_HDF5_SUPPORT_ENABLED
-#include <Alembic/AbcCoreHDF5/All.h>
-#endif // PXR_HDF5_SUPPORT_ENABLED
-
-#include <Alembic/AbcCoreOgawa/All.h>
+#include <Alembic/AbcCoreFactory/IFactory.h>
 #include <Alembic/AbcGeom/GeometryScope.h>
 #include <Alembic/AbcGeom/ICamera.h>
 #include <Alembic/AbcGeom/ICurves.h>
@@ -83,13 +75,13 @@ TF_DEFINE_ENV_SETTING(
     "Issue warnings for all unsupported values encountered.");
 
 TF_DEFINE_ENV_SETTING(
-    USD_ABC_NUM_OGAWA_STREAMS, 4,
+    USD_ABC_NUM_OGAWA_STREAMS, 1,
     "The number of threads available for reading ogawa-backed files via UsdAbc.");
 
 TF_DEFINE_ENV_SETTING(
-    USD_ABC_WRITE_UV_AS_ST_TEXCOORD2FARRAY, false,
-    "Switch to true to enable writing Alembic uv sets as primvars:st with type "
-    "texCoord2fArray to USD");
+    USD_ABC_WRITE_UV_AS_ST_TEXCOORD2FARRAY, true,
+    "Switch to false to disable writing Alembic uv sets as primvars:st with "
+    "type texCoord2fArray to USD");
 
 
 TF_DEFINE_ENV_SETTING(
@@ -132,7 +124,7 @@ _GetNumOgawaStreams()
                     static_cast<int>(WorkGetConcurrencyLimit()));
 }
 
-#ifdef PXR_HDF5_SUPPORT_ENABLED
+#if PXR_HDF5_SUPPORT_ENABLED && !H5_HAVE_THREADSAFE
 // A global mutex until our HDF5 library is thread safe.  It has to be
 // recursive to handle the case where we write an Alembic file using an
 // UsdAbc_AlembicData as the source.
@@ -389,14 +381,15 @@ _GetDoubleMetadata(
 //
 
 // Helpers for \c AlembicProperty.
-template <class T, class Enable = void>
+template <class T>
 struct _AlembicPropertyHelper {
 //  T operator()(const ICompoundProperty& parent, const std::string& name)const;
 };
 template <>
 struct _AlembicPropertyHelper<ICompoundProperty> {
     ICompoundProperty
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
             if (header->isCompound()) {
@@ -409,7 +402,8 @@ struct _AlembicPropertyHelper<ICompoundProperty> {
 template <>
 struct _AlembicPropertyHelper<IScalarProperty> {
     IScalarProperty
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
             if (header->isScalar()) {
@@ -422,10 +416,11 @@ struct _AlembicPropertyHelper<IScalarProperty> {
 template <class T>
 struct _AlembicPropertyHelper<ITypedScalarProperty<T> > {
     ITypedScalarProperty<T>
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
-            if (ITypedScalarProperty<T>::matches(*header)) {
+            if (ITypedScalarProperty<T>::matches(*header, matching)) {
                 return ITypedScalarProperty<T>(parent, name);
             }
         }
@@ -435,7 +430,8 @@ struct _AlembicPropertyHelper<ITypedScalarProperty<T> > {
 template <>
 struct _AlembicPropertyHelper<IArrayProperty> {
     IArrayProperty
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
             if (header->isArray()) {
@@ -448,10 +444,11 @@ struct _AlembicPropertyHelper<IArrayProperty> {
 template <class T>
 struct _AlembicPropertyHelper<ITypedArrayProperty<T> > {
     ITypedArrayProperty<T>
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
-            if (ITypedArrayProperty<T>::matches(*header)) {
+            if (ITypedArrayProperty<T>::matches(*header, matching)) {
                 return ITypedArrayProperty<T>(parent, name);
             }
         }
@@ -461,10 +458,11 @@ struct _AlembicPropertyHelper<ITypedArrayProperty<T> > {
 template <class T>
 struct _AlembicPropertyHelper<ITypedGeomParam<T> > {
     ITypedGeomParam<T>
-    operator()(const ICompoundProperty& parent, const std::string& name) const
+    operator()(const ICompoundProperty& parent, const std::string& name,
+               SchemaInterpMatching matching = kStrictMatching) const
     {
         if (const PropertyHeader* header = parent.getPropertyHeader(name)) {
-            if (ITypedGeomParam<T>::matches(*header)) {
+            if (ITypedGeomParam<T>::matches(*header, matching)) {
                 return ITypedGeomParam<T>(parent, name);
             }
         }
@@ -502,10 +500,10 @@ public:
     /// you'll get an object of the requested type but its valid()
     /// method will return \c false.
     template <class T>
-    T Cast() const
+    T Cast(SchemaInterpMatching matching = kStrictMatching) const
     {
         if (_parent.valid()) {
-            return _AlembicPropertyHelper<T>()(_parent, _name);
+            return _AlembicPropertyHelper<T>()(_parent, _name, matching);
         }
         else {
             return T();
@@ -688,11 +686,11 @@ public:
         Ordering propertyOrdering;
         MetadataMap metadata;
         PropertyMap propertiesCache;
-        SdfPath master;                 // Path to master; only set on instances
-        std::string instanceSource;     // Alembic path to instance source;
-                                        // only set on master.
-        bool instanceable;              // Instanceable; only set on master.
-        bool promoted;                  // True if a promoted instance/master
+        SdfPath prototype;           // Path to prototype; only set on instances
+        std::string instanceSource;  // Alembic path to instance source;
+                                     // only set on prototype.
+        bool instanceable;           // Instanceable; only set on prototype.
+        bool promoted;               // True if a promoted instance/prototype
     };
 
     _ReaderContext();
@@ -701,7 +699,8 @@ public:
     /// @{
 
     /// Open an archive.
-    bool Open(const std::string& filePath, std::string* errorLog);
+    bool Open(const std::string& filePath, std::string* errorLog,
+              const SdfFileFormat::FileFormatArguments& args);
 
     /// Close the archive.
     void Close();
@@ -788,14 +787,6 @@ private:
     typedef std::set<_ObjectPtr> _ObjectReaderSet;
     typedef std::map<_ObjectPtr, _ObjectReaderSet> _SourceToInstancesMap;
 
-    // Open an archive of different formats.
-    bool _OpenHDF5(const std::string& filePath, IArchive*,
-                   std::string* format, std::recursive_mutex** mutex) const;
-    bool _OpenOgawa(const std::string& filePath, IArchive*,
-                    std::string* format, std::recursive_mutex** mutex) const;
-    bool _OpenGit(const std::string& filePath, IArchive*,
-                    std::string* format, std::recursive_mutex** mutex) const;
-
     // Walk the object hierarchy looking for instances and instance sources.
     static void _FindInstances(const IObject& parent,
                                _SourceToInstancesMap* instances);
@@ -852,18 +843,18 @@ private:
     const _ReaderSchema* _schema;
 
     // A map of the full names of known instance sources.  The mapped
-    // value has the Usd master path and whether we're using the actual
+    // value has the Usd prototype path and whether we're using the actual
     // instance source or its parent.  We use the parent in some cases
     // in order to get more sharing in the Usd world.
-    struct _MasterInfo {
+    struct _PrototypeInfo {
         SdfPath path;
         bool promoted;
     };
-    typedef std::map<std::string, _MasterInfo> _SourceToMasterMap;
-    _SourceToMasterMap _instanceSources;
+    typedef std::map<std::string, _PrototypeInfo> _SourceToPrototypeMap;
+    _SourceToPrototypeMap _instanceSources;
 
     // A map of full name of instance to full name of source.  If we're
-    // using the parent of the source as the master then the source path
+    // using the parent of the source as the prototype then the source path
     // is the parent of the actual source and the instance path is the
     // parent of the actual instance.
     typedef std::map<std::string, std::string> _InstanceToSourceMap;
@@ -894,21 +885,57 @@ _ReaderContext::_ReaderContext() :
 }
 
 bool
-_ReaderContext::Open(const std::string& filePath, std::string* errorLog)
+_ReaderContext::Open(const std::string& filePath, std::string* errorLog,
+                     const SdfFileFormat::FileFormatArguments& args)
 {
     Close();
 
-    IArchive archive;
+    std::vector<std::string> layeredABC;
+    {
+        auto abcLayers = args.find("abcLayers");
+        if (abcLayers != args.end()) {
+            for (auto&& l : TfStringSplit(abcLayers->second, ",")) {
+                layeredABC.emplace_back(std::move(l));
+            }
+        }
+    }
+    layeredABC.emplace_back(filePath);
+
+#if PXR_HDF5_SUPPORT_ENABLED && !H5_HAVE_THREADSAFE
+    // HDF5 may not be thread-safe.
+    using lock_guard = std::lock_guard<std::recursive_mutex>;
+    std::unique_ptr<std::lock_guard<std::recursive_mutex>> hfd5Lock(new lock_guard(*_hdf5));
+#endif
+
+    using IFactory = ::Alembic::AbcCoreFactory::IFactory;
+    IFactory factory;
+    IFactory::CoreType abcType;
+    factory.setPolicy(Abc::ErrorHandler::Policy::kQuietNoopPolicy);
+    factory.setOgawaNumStreams(_GetNumOgawaStreams());
+    IArchive archive = factory.getArchive(layeredABC, abcType);
+
+#if PXR_HDF5_SUPPORT_ENABLED && !H5_HAVE_THREADSAFE
+    if (abcType == IFactory::kHDF5 || abcType == IFactory::kLayer) {
+        // An HDF5, or layered which may have an HDF5 layer
+        _mutex = &*_hdf5;
+    } else {
+        // Don't need the HDF5 lock
+        hfd5Lock.reset();
+    }
+#endif
+
     std::string format;
-    if (!(_OpenOgawa(filePath, &archive, &format, &_mutex) ||
-          _OpenHDF5(filePath, &archive, &format, &_mutex) ||
-          _OpenGit(filePath, &archive, &format, &_mutex))) {
-        *errorLog = "Unsupported format";
+    switch (abcType) {
+        case IFactory::kHDF5: format = "HDF5"; break;
+        case IFactory::kOgawa: format = "Ogawa"; break;
+        case IFactory::kLayer: format = "Layer"; break;
+        default:
+        case IFactory::kUnknown: format = "Unknown"; break;
+    }
+    if (!archive.valid()) {
+        *errorLog = TfStringPrintf("Unsupported format: '%s'", format.c_str());
         return false;
     }
-
-    // Lock _mutex if it exists for remainder of this method.
-    _Lock lock(_mutex);
 
     // Get info.
     uint32_t apiVersion;
@@ -923,7 +950,7 @@ _ReaderContext::Open(const std::string& filePath, std::string* errorLog)
     }
 
     // Cut over.
-    _archive = archive;
+    _archive = std::move(archive);
 
     // Fill pseudo-root in the cache.
     const SdfPath rootPath = SdfPath::AbsoluteRootPath();
@@ -969,28 +996,50 @@ _ReaderContext::Open(const std::string& filePath, std::string* errorLog)
         }
 
         // Save instancing info to lookup during main traversal, including
-        // choosing paths for the masters.
+        // choosing paths for the prototypes.
         _SetupInstancing(instances, promotable, &usedRootNames);
     }
 
-    // Fill rest of the cache.
-    _ReadPrimChildren(*this, root, rootPath, *_pseudoRoot);
+    // Re-root so the <defaultPrim> is actually the archive!
+    TfToken abcReRoot;
+    {
+        auto reRoot = args.find("abcReRoot");
+        if (reRoot != args.end()) {
+            if (!TfIsValidIdentifier(reRoot->second)) {
+                TF_WARN("[usdAbc] Ignoring re-root because identifer '%s' is"
+                        " not valid (%s).", reRoot->second.c_str(),
+                        filePath.c_str());
+            } else
+                abcReRoot = TfToken(reRoot->second);
+        }
+    }
 
-    // Append the masters to the pseudo-root.  We use lexicographical order
+    // Fill rest of the cache.
+    if (!abcReRoot.IsEmpty()) {
+        SdfPath compPath = rootPath.AppendChild(abcReRoot);
+        auto& xform = _prims[compPath];
+        xform.typeName = UsdAbcPrimTypeNames->Xform;
+        xform.specifier = SdfSpecifierDef;
+        _ReadPrimChildren(*this, root, compPath, xform);
+        _pseudoRoot->children.emplace_back(std::move(abcReRoot));
+    } else
+        _ReadPrimChildren(*this, root, rootPath, *_pseudoRoot);
+
+    // Append the prototypes to the pseudo-root.  We use lexicographical order
     // but the order doesn't really matter.  We also note here the Alembic
-    // source path for each master and whether it's instanceable or not
+    // source path for each prototype and whether it's instanceable or not
     // (which is chosen simply by the disableInstancing flag).
     if (!_instanceSources.empty()) {
         const bool instanceable =
             !IsFlagSet(UsdAbc_AlembicContextFlagNames->disableInstancing);
-        std::map<SdfPath, std::string> masters;
-        for (const _SourceToMasterMap::value_type& v: _instanceSources) {
-            masters[v.second.path] = v.first;
+        std::map<SdfPath, std::string> prototypes;
+        for (const _SourceToPrototypeMap::value_type& v: _instanceSources) {
+            prototypes[v.second.path] = v.first;
         }
-        for (const auto& master: masters) {
-            const SdfPath& name = master.first;
+        for (const auto& prototype: prototypes) {
+            const SdfPath& name = prototype.first;
             _pseudoRoot->children.push_back(name.GetNameToken());
-            _prims[name].instanceSource = master.second;
+            _prims[name].instanceSource = prototype.second;
             _prims[name].instanceable   = instanceable;
         }
     }
@@ -1022,19 +1071,21 @@ _ReaderContext::Open(const std::string& filePath, std::string* errorLog)
         _GetDoubleMetadata(metadata, _pseudoRoot->metadata,
                            SdfFieldKeys->FramesPerSecond);
 
+        _GetTokenMetadata(metadata, _pseudoRoot->metadata,
+                          UsdGeomTokens->upAxis);
+
         // Read the default prim name.
         _GetTokenMetadata(metadata, _pseudoRoot->metadata,
                           SdfFieldKeys->DefaultPrim);
-
-        _GetTokenMetadata(metadata, _pseudoRoot->metadata,
-                          UsdGeomTokens->upAxis);
     }
 
     // If no default prim then choose one by a heuristic (first root prim).
     if (!_pseudoRoot->children.empty()) {
-        _pseudoRoot->metadata.insert(
-            std::make_pair(SdfFieldKeys->DefaultPrim,
-                           VtValue(_pseudoRoot->children.front())));
+        // Use emplace to leave existing property above untouched and avoid the
+        // VtValue construction if possible (gcc-4.8 requires the fun syntax)
+        _pseudoRoot->metadata.emplace(std::piecewise_construct,
+            std::forward_as_tuple(SdfFieldKeys->DefaultPrim),
+            std::forward_as_tuple(_pseudoRoot->children.front()));
     }
 
     return true;
@@ -1086,11 +1137,11 @@ _ReaderContext::AddInstance(const SdfPath& path, const IObject& object)
     // An instance is just a prim...
     Prim& result = AddPrim(path);
 
-    // ...that also has its master member set.
+    // ...that also has its prototype member set.
     const auto i = _instances.find(object.getFullName());
     if (i != _instances.end()) {
-        const _MasterInfo& info = _instanceSources.find(i->second)->second;
-        result.master   = info.path;
+        const _PrototypeInfo& info = _instanceSources.find(i->second)->second;
+        result.prototype   = info.path;
         result.promoted = info.promoted;
     }
     return result;
@@ -1280,7 +1331,7 @@ _ReaderContext::List(const SdfPath& path) const
                 if (prim->propertyOrdering) {
                     result.push_back(SdfFieldKeys->PropertyOrder);
                 }
-                if (!prim->master.IsEmpty()) {
+                if (!prim->prototype.IsEmpty()) {
                     result.push_back(SdfFieldKeys->References);
                 }
                 if (!prim->instanceSource.empty()) {
@@ -1327,69 +1378,6 @@ _ReaderContext::ListTimeSamplesForPath(const SdfPath& path) const
     return empty;
 }
 
-bool
-_ReaderContext::_OpenHDF5(
-    const std::string& filePath,
-    IArchive* result,
-    std::string* format,
-    std::recursive_mutex** mutex) const
-{
-#ifdef PXR_HDF5_SUPPORT_ENABLED
-    // HDF5 may not be thread-safe.
-    std::lock_guard<std::recursive_mutex> lock(*_hdf5);
-
-    *format = "HDF5";
-    *result = IArchive(Alembic::AbcCoreHDF5::ReadArchive(),
-                       filePath, ErrorHandler::kQuietNoopPolicy);
-    if (*result) {
-        // Single thread access to HDF5.
-        *mutex = &*_hdf5;
-        return true;
-    }
-    return false;
-#else
-    return false;
-#endif // PXR_HDF5_SUPPORT_ENABLED
-}
-
-bool
-_ReaderContext::_OpenOgawa(
-    const std::string& filePath,
-    IArchive* result,
-    std::string* format,
-    std::recursive_mutex** mutex) const
-{
-    *format = "Ogawa";
-    #if ALEMBIC_LIBRARY_VERSION >= 10709
-    *result = IArchive(
-                Alembic::AbcCoreOgawa::ReadArchive(
-                    _GetNumOgawaStreams(), 
-                    TfGetEnvSetting(USD_ABC_READ_ARCHIVE_USE_MMAP)),
-                filePath, ErrorHandler::kQuietNoopPolicy);
-    #else
-    *result = IArchive(Alembic::AbcCoreOgawa::ReadArchive(_GetNumOgawaStreams()),
-                       filePath, ErrorHandler::kQuietNoopPolicy);
-    #endif
-    return *result;
-}
-
-bool
-_ReaderContext::_OpenGit(
-    const std::string& filePath,
-    IArchive* result,
-    std::string* format,
-    std::recursive_mutex** mutex) const
-{
-#ifdef PXR_MULTIVERSE_SUPPORT_ENABLED
-    *format = "Git";
-    *result = IArchive(Alembic::AbcCoreGit::ReadArchive(),
-                       filePath, ErrorHandler::kQuietNoopPolicy);
-    return *result;
-#else
-    return false;
-#endif // PXR_MULTIVERSE_SUPPORT_ENABLED
-}
-
 void
 _ReaderContext::_FindInstances(
     const IObject& parent,
@@ -1418,7 +1406,7 @@ _ReaderContext::_FindPromotable(
 {
     // We want to use the parent of the source (and the parents of the
     // corresponging instances) where possible.  Since Usd can't share
-    // the master prim but can share its descendants, we can get better
+    // the prototype prim but can share its descendants, we can get better
     // sharing when we can use the parent.  We can't do this if the
     // source or any instance has siblings and we won't do this unless
     // the source/instance is an IGeomBase and its parent is a transform.
@@ -1459,9 +1447,9 @@ _ReaderContext::_SetupInstancing(
     std::set<std::string>* usedNames)
 {
     // Now build the mapping of instances to sources and a mapping from the
-    // (possibly promoted) source full name to the corresponding Usd master
+    // (possibly promoted) source full name to the corresponding Usd prototype
     // prim path.  We can no longer use Alembic to answer these questions
-    // since it doesn't know about promoted masters/instances.
+    // since it doesn't know about promoted prototypes/instances.
     for (const auto& value: instances) {
         const _ObjectPtr& source = value.first;
         const bool promoted = (promotable.find(source) != promotable.end());
@@ -1483,27 +1471,27 @@ _ReaderContext::_SetupInstancing(
 
         // The Alembic instance source is just another instance as far
         // as Usd is concerned.  Unlike Alembic, Usd creates a separate
-        // master that has special treatment.
+        // prototype that has special treatment.
         _instances[sourceFullName] = sourceFullName;
 
         // Construct a unique name.  Start by getting the name
         // portion of the instance source's path.
         const std::string::size_type j = sourceFullName.rfind('/');
-        const std::string masterName =
+        const std::string prototypeName =
             (j != std::string::npos)
                 ? sourceFullName.substr(j + 1)
                 : sourceFullName;
 
         // Now mangle/uniquify the name and make a root prim path.
-        const SdfPath masterPath =
+        const SdfPath prototypePath =
                 SdfPath::AbsoluteRootPath().AppendChild(TfToken(
-                    _CleanName(masterName, " _", *usedNames,
+                    _CleanName(prototypeName, " _", *usedNames,
                                _AlembicFixName(),
                                &SdfPath::IsValidIdentifier)));
 
-        // Save the source/master info.
-        _MasterInfo masterInfo = { masterPath, promoted };
-        _instanceSources.emplace(sourceFullName, std::move(masterInfo));
+        // Save the source/prototype info.
+        _PrototypeInfo prototypeInfo = { prototypePath, promoted };
+        _instanceSources.emplace(sourceFullName, std::move(prototypeInfo));
     }
 }
 
@@ -1574,10 +1562,10 @@ _ReaderContext::_HasField(
             }
         }
         else if (fieldName == SdfFieldKeys->CustomData) {
-            // Provide the Alembic source path on master prims.  In Usd
-            // we copy the instance source to a new root master prim and
+            // Provide the Alembic source path on prototype prims.  In Usd
+            // we copy the instance source to a new root prototype prim and
             // the instance source becomes just another instance of the
-            // master.  This gives us a breadcrumb to follow back.
+            // prototype.  This gives us a breadcrumb to follow back.
             if (!prim->instanceSource.empty()) {
                 static const std::string key("abcInstanceSourcePath");
                 VtDictionary data;
@@ -1591,10 +1579,10 @@ _ReaderContext::_HasField(
             }
         }
         else if (fieldName == SdfFieldKeys->References) {
-            if (!prim->master.IsEmpty()) {
+            if (!prim->prototype.IsEmpty()) {
                 SdfReferenceListOp refs;
                 SdfReferenceVector items;
-                items.push_back(SdfReference(std::string(), prim->master));
+                items.push_back(SdfReference(std::string(), prim->prototype));
                 refs.SetExplicitItems(items);
                 return value.Set(refs);
             }
@@ -1689,6 +1677,16 @@ _ReaderContext::_HasValue(
 // Utilities
 //
 
+/// Return the number of interesting samples in an object
+template <typename T> size_t
+_GetNumSamples(const T& object) {
+    size_t nSamples = object.getNumSamples();
+    if (!object.isConstant())
+        return nSamples;
+
+    return std::min(nSamples, size_t(1));
+}
+
 /// Fill sample times from an object with getTimeSampling() and
 /// getNumSamples() methods.
 template <class T>
@@ -1699,7 +1697,7 @@ _GetSampleTimes(const T& object)
     _AlembicTimeSamples result;
     if (object.valid()) {
         TimeSamplingPtr timeSampling = object.getTimeSampling();
-        for (size_t i = 0, n = object.getNumSamples(); i != n; ++i) {
+        for (size_t i = 0, n = _GetNumSamples(object); i < n; ++i) {
             result.push_back(timeSampling->getSampleTime(i));
         }
     }
@@ -2343,8 +2341,9 @@ struct _CopyGeneric {
     typedef typename PropertyType::traits_type AlembicTraits;
 
     PropertyType object;
-    _CopyGeneric(const AlembicProperty& object_) :
-        object(object_.Cast<PropertyType>()) { }
+    _CopyGeneric(const AlembicProperty& object_,
+                 SchemaInterpMatching matching = kStrictMatching) :
+        object(object_.Cast<PropertyType>(matching)) { }
 
     bool operator()(_IsValidTag) const
     {
@@ -2452,6 +2451,48 @@ struct _CopyIndices {
                                              int>(sample.getIndices()));
         }
         return false;
+    }
+};
+
+/// Copy hermite points from interleaved IP3fArrayProperty.
+struct _CopyHermitePoints : _CopyGeneric<IP3fArrayProperty, GfVec3f> {
+    _CopyHermitePoints(const AlembicProperty& object_)
+        : _CopyGeneric<IP3fArrayProperty, GfVec3f>(object_, kStrictMatching) {}
+
+    using _CopyGeneric<IP3fArrayProperty, GfVec3f>::operator();
+
+    bool operator()(const UsdAbc_AlembicDataAny& dst,
+                    const ISampleSelector& iss) const {
+        typedef typename IP3fArrayProperty::sample_ptr_type SamplePtr;
+        typedef typename IP3fArrayProperty::traits_type AlembicTraits;
+        SamplePtr samplePtr;
+        object.get(samplePtr, iss);
+        VtValue value = _CopyGenericValue<AlembicTraits, GfVec3f>(samplePtr);
+        VtVec3fArray interleaved = value.Get<VtVec3fArray>();
+        auto separated =
+            UsdGeomHermiteCurves::PointAndTangentArrays::Separate(interleaved);
+        return dst.Set(VtValue(separated.GetPoints()));
+    }
+};
+
+/// Copy hermite points from interleaved IP3fArrayProperty.
+struct _CopyHermiteTangents : _CopyGeneric<IP3fArrayProperty, GfVec3f> {
+    _CopyHermiteTangents(const AlembicProperty& object_)
+        : _CopyGeneric<IP3fArrayProperty, GfVec3f>(object_, kStrictMatching) {}
+
+    using _CopyGeneric<IP3fArrayProperty, GfVec3f>::operator();
+
+    bool operator()(const UsdAbc_AlembicDataAny& dst,
+                    const ISampleSelector& iss) const {
+        typedef typename IP3fArrayProperty::sample_ptr_type SamplePtr;
+        typedef typename IP3fArrayProperty::traits_type AlembicTraits;
+        SamplePtr samplePtr;
+        object.get(samplePtr, iss);
+        VtValue value = _CopyGenericValue<AlembicTraits, GfVec3f>(samplePtr);
+        VtVec3fArray interleaved = value.Get<VtVec3fArray>();
+        auto separated =
+            UsdGeomHermiteCurves::PointAndTangentArrays::Separate(interleaved);
+        return dst.Set(VtValue(separated.GetTangents()));
     }
 };
 
@@ -2885,8 +2926,14 @@ _ConvertCurveBasis(BasisType value)
     case kCatmullromBasis:
         return UsdGeomTokens->catmullRom;
     case kHermiteBasis:
+        TF_WARN(
+            "'hermite' basis is no longer an allowed token for "
+            "UsdGeomBasisCurves.");
         return UsdGeomTokens->hermite;
     case kPowerBasis:
+        TF_WARN(
+            "'power' basis is no longer an allowed token for "
+            "UsdGeomBasisCurves.");
         return UsdGeomTokens->power;
     }
 }
@@ -3087,8 +3134,10 @@ _ReadXform(_PrimReaderContext* context)
     // Add child properties under schema.
     context->SetSchema(Type::schema_type::info_type::defaultName());
 
+    const index_t nSamples = _GetNumSamples(schema);
+
     // Error checking.
-    for (index_t i = 0, n = schema.getNumSamples(); i != n; ++i) {
+    for (index_t i = 0; i < nSamples; ++i) {
         if (!schema.getInheritsXforms(ISampleSelector(i))) {
             TF_WARN("Ignoring transform that doesn't inherit at "
                     "samples at time %f at <%s>",
@@ -3102,7 +3151,7 @@ _ReadXform(_PrimReaderContext* context)
     context->GetPrim().typeName = UsdAbcPrimTypeNames->Xform;
 
     // Add properties.
-    if (schema.getNumSamples() > 0) {
+    if (nSamples > 0) {
         // We could author individual component transforms here, just 
         // as the transform is represented in alembic, but round-tripping 
         // will be an issue because of the way the alembicWriter reads
@@ -3151,7 +3200,7 @@ _ReadPolyMesh(_PrimReaderContext* context)
         UsdGeomTokens->points,
         SdfValueTypeNames->Point3fArray,
         _CopyGeneric<IP3fArrayProperty, GfVec3f>(
-            context->ExtractSchema("P")));
+            context->ExtractSchema("P"), kNoMatching));
     context->AddProperty(
         UsdGeomTokens->velocities,
         SdfValueTypeNames->Vector3fArray,
@@ -3207,7 +3256,7 @@ _ReadSubD(_PrimReaderContext* context)
         UsdGeomTokens->points,
         SdfValueTypeNames->Point3fArray,
         _CopyGeneric<IP3fArrayProperty, GfVec3f>(
-            context->ExtractSchema("P")));
+            context->ExtractSchema("P"), kNoMatching));
     context->AddProperty(
         UsdGeomTokens->velocities,
         SdfValueTypeNames->Vector3fArray,
@@ -3236,7 +3285,7 @@ _ReadSubD(_PrimReaderContext* context)
         UsdGeomTokens->faceVaryingLinearInterpolation,
         SdfValueTypeNames->Token,
         _CopyFaceVaryingInterpolateBoundary(
-            context->ExtractSchema(".faceVaryingLinearInterpolation")));
+            context->ExtractSchema(".faceVaryingInterpolateBoundary")));
     context->AddProperty(
         UsdGeomTokens->holeIndices,
         SdfValueTypeNames->IntArray,
@@ -3351,21 +3400,71 @@ _ReadCurves(_PrimReaderContext* context)
     (void)context->ExtractSchema("curveBasisAndType");
 
     // Set prim type.  This depends on the CurveType of the curve.
-    context->GetPrim().typeName = (sample.getType() != kVariableOrder)
-        ? UsdAbcPrimTypeNames->BasisCurves
-        : UsdAbcPrimTypeNames->NurbsCurves;
+    if (sample.getType() == kVariableOrder){
+        context->GetPrim().typeName = UsdAbcPrimTypeNames->NurbsCurves;
+        context->AddProperty(
+            UsdGeomTokens->order,
+            SdfValueTypeNames->IntArray,
+            _CopyGeneric<IInt32ArrayProperty, int>(
+                context->ExtractSchema(".orders")));
+        context->AddProperty(
+            UsdGeomTokens->knots,
+            SdfValueTypeNames->DoubleArray,
+            _CopyGeneric<IFloatArrayProperty, double>(
+                context->ExtractSchema(".knots")));
+    } else if ((sample.getType() == kCubic) &&
+               (sample.getBasis() == kHermiteBasis)) {
+        context->GetPrim().typeName = UsdAbcPrimTypeNames->HermiteCurves;
+        if (_ConvertCurveWrap(sample.getWrap()) != UsdGeomTokens->nonperiodic) {
+            TF_WARN("Wrap mode is not supported for cubic hermite curves: '%s'",
+                    context->GetPath().GetText());
+        }
+        if (_CopyGeneric<IV3fArrayProperty, GfVec3f>(
+                context->ExtractSchema(".velocities"))(_IsValidTag())) {
+            TF_WARN(
+                "Velocities are not supported for cubic hermite curves: '%s'",
+                context->GetPath().GetText());
+        }
+        // The Usd representation separates points and tangents
+        // The Alembic representation interleaves them as (P0, T0, ... Pn, Tn)
+        context->AddProperty(
+            UsdGeomTokens->points,
+            SdfValueTypeNames->Point3fArray,
+            _CopyHermitePoints(context->ExtractSchema("P")));
+        context->AddProperty(
+            UsdGeomTokens->tangents,
+            SdfValueTypeNames->Vector3fArray,
+            _CopyHermiteTangents(context->ExtractSchema("P")));
+    } else {
+        context->GetPrim().typeName = UsdAbcPrimTypeNames->BasisCurves;
+        context->AddUniformProperty(
+            UsdGeomTokens->type,
+            SdfValueTypeNames->Token,
+            _CopySynthetic(_ConvertCurveType(sample.getType())));
+        context->AddUniformProperty(
+            UsdGeomTokens->basis,
+            SdfValueTypeNames->Token,
+            _CopySynthetic(_ConvertCurveBasis(sample.getBasis())));
+        context->AddUniformProperty(
+            UsdGeomTokens->wrap,
+            SdfValueTypeNames->Token,
+            _CopySynthetic(_ConvertCurveWrap(sample.getWrap())));
+    }
 
-    // Add properties.
-    context->AddProperty(
-        UsdGeomTokens->points,
-        SdfValueTypeNames->Point3fArray,
-        _CopyGeneric<IP3fArrayProperty, GfVec3f>(
-            context->ExtractSchema("P")));
-    context->AddProperty(
-        UsdGeomTokens->velocities,
-        SdfValueTypeNames->Vector3fArray,
-        _CopyGeneric<IV3fArrayProperty, GfVec3f>(
-            context->ExtractSchema(".velocities")));
+    if ((context->GetPrim().typeName == UsdAbcPrimTypeNames->BasisCurves) ||
+        (context->GetPrim().typeName == UsdAbcPrimTypeNames->NurbsCurves)){
+        context->AddProperty(
+            UsdGeomTokens->points,
+            SdfValueTypeNames->Point3fArray,
+            _CopyGeneric<IP3fArrayProperty, GfVec3f>(
+                context->ExtractSchema("P"), kNoMatching));
+        context->AddProperty(
+            UsdGeomTokens->velocities,
+            SdfValueTypeNames->Vector3fArray,
+            _CopyGeneric<IV3fArrayProperty, GfVec3f>(
+                context->ExtractSchema(".velocities")));
+    }
+
     context->AddProperty(
         UsdGeomTokens->normals,
         SdfValueTypeNames->Normal3fArray,
@@ -3381,34 +3480,6 @@ _ReadCurves(_PrimReaderContext* context)
         SdfValueTypeNames->FloatArray,
         _CopyGeneric<IFloatGeomParam, float>(
             context->ExtractSchema("width")));
-
-    // The rest depend on the type.
-    if (sample.getType() != kVariableOrder) {
-        context->AddUniformProperty(
-            UsdGeomTokens->basis,
-            SdfValueTypeNames->Token,
-            _CopySynthetic(_ConvertCurveBasis(sample.getBasis())));
-        context->AddUniformProperty(
-            UsdGeomTokens->type,
-            SdfValueTypeNames->Token,
-            _CopySynthetic(_ConvertCurveType(sample.getType())));
-        context->AddUniformProperty(
-            UsdGeomTokens->wrap,
-            SdfValueTypeNames->Token,
-            _CopySynthetic(_ConvertCurveWrap(sample.getWrap())));
-    }
-    else {
-        context->AddProperty(
-            UsdGeomTokens->order,
-            SdfValueTypeNames->IntArray,
-            _CopyGeneric<IInt32ArrayProperty, int>(
-                context->ExtractSchema(".orders")));
-        context->AddProperty(
-            UsdGeomTokens->knots,
-            SdfValueTypeNames->DoubleArray,
-            _CopyGeneric<IFloatArrayProperty, double>(
-                context->ExtractSchema(".knots")));
-    }
 }
 
 static
@@ -3434,7 +3505,7 @@ _ReadPoints(_PrimReaderContext* context)
         UsdGeomTokens->points,
         SdfValueTypeNames->Point3fArray,
         _CopyGeneric<IP3fArrayProperty, GfVec3f>(
-            context->ExtractSchema("P")));
+            context->ExtractSchema("P"), kNoMatching));
     context->AddProperty(
         UsdGeomTokens->velocities,
         SdfValueTypeNames->Vector3fArray,
@@ -3667,36 +3738,36 @@ _ReadPrim(
     }
 
     // If this is an instance then we create a prim at the path and
-    // give it a reference to the master.  Then we change the path to
-    // be that of the master and continue traversal.  This puts the
-    // entire master hierarchy under the new path and puts a simple
+    // give it a reference to the prototype.  Then we change the path to
+    // be that of the prototype and continue traversal.  This puts the
+    // entire prototype hierarchy under the new path and puts a simple
     // prim with nothing but a reference at the old path.
     else {
         instance = &context.AddInstance(path, object);
-        if (!instance->master.IsEmpty()) {
-            path = instance->master;
+        if (!instance->prototype.IsEmpty()) {
+            path = instance->prototype;
         }
         else {
             instance = nullptr;
-            const std::string masterPath =
+            const std::string prototypePath =
                 object.isInstanceRoot()
                     ? IObject(object).instanceSourcePath()
                     : object.getFullName();
             TF_CODING_ERROR(
-                "Instance %s has no master at %s.",
+                "Instance %s has no prototype at %s.",
                 object.getFullName().c_str(),
-                masterPath.c_str());
+                prototypePath.c_str());
             // Continue and we'll simply expand the instance.
         }
     }
 
     // At this point if instance != nullptr then we're instancing,
-    // path points to the master, and instance points to the instance
+    // path points to the prototype, and instance points to the instance
     // prim's cache.
 
     // If the instance source was promoted then we need to copy the
     // prim's metadata and properties to the instance.  But we don't
-    // need quite everything because the master will supply some of it.
+    // need quite everything because the prototype will supply some of it.
     // For simplicity, we copy all data as usual then discard what we
     // don't want.
     if (instance && instance->promoted) {
@@ -3704,7 +3775,7 @@ _ReadPrim(
         _GetPrimMetadata(object.getMetaData(), *instance);
 
         // Read the properties.  Reconstruct the instance path since we've
-        // changed path to point at the master.
+        // changed path to point at the prototype.
         const SdfPath instancePath = parentPath.AppendChild(TfToken(name));
         _PrimReaderContext primContext(context, object, instancePath);
         for (const auto& reader : context.GetSchema().GetPrimReaders(schemaName)) {
@@ -3713,18 +3784,18 @@ _ReadPrim(
         }
 
         // Discard name children ordering since we don't have any name
-        // children (except via the master reference).
+        // children (except via the prototype reference).
         instance->primOrdering = boost::none;
     }
 
-    // Get the prim cache.  If instance is true then prim is the master,
-    // otherwise it's a non-instanced prim or a descendant of a master.
+    // Get the prim cache.  If instance is true then prim is the prototype,
+    // otherwise it's a non-instanced prim or a descendant of a prototype.
     _ReaderContext::Prim& prim = context.AddPrim(path);
 
-    // If we're instancing but the master prim cache already has a type
-    // name then we've already found a previous instance of this master
-    // and we've already traversed the master once.  Don't traverse a
-    // master again.
+    // If we're instancing but the prototype prim cache already has a type
+    // name then we've already found a previous instance of this prototype
+    // and we've already traversed the prototype once.  Don't traverse a
+    // prototype again.
     if (!instance || prim.typeName.IsEmpty()) {
         // Add prim metadata.
         _GetPrimMetadata(object.getMetaData(), prim);
@@ -3757,27 +3828,27 @@ _ReadPrim(
 #endif
 
         // If the instance source was promoted then we don't need or want
-        // any of the instance source's properties on the master since each
-        // Usd instance will have its own.  We also don't want the master
+        // any of the instance source's properties on the prototype since each
+        // Usd instance will have its own.  We also don't want the prototype
         // to have most metadata for the same reason.  For the sake of
         // simplicity of the code, we already copied all of that info so
         // we'll discard it now.
         if (instance && instance->promoted) {
-            // prim is the master.
+            // prim is the prototype.
             prim.properties.clear();
             prim.propertyOrdering = boost::none;
             prim.metadata.clear();
             prim.propertiesCache.clear();
         }
 
-        // If this is a master then make it an over.
+        // If this is a prototype then make it an over.
         if (instance) {
             prim.specifier = SdfSpecifierOver;
         }
     }
 
     // Modify the metadata for an instance.  We wait until now because we
-    // want to get the master's type name.
+    // want to get the prototype's type name.
     if (instance) {
         instance->typeName  = prim.typeName;
         instance->specifier = SdfSpecifierDef;
@@ -4057,13 +4128,14 @@ UsdAbc_AlembicDataReader::~UsdAbc_AlembicDataReader()
 }
 
 bool
-UsdAbc_AlembicDataReader::Open(const std::string& filePath)
+UsdAbc_AlembicDataReader::Open(const std::string& filePath,
+                               const SdfFileFormat::FileFormatArguments& args)
 {
     TRACE_FUNCTION();
 
     _errorLog.clear();
     try {
-        if (_impl->Open(filePath, &_errorLog)) {
+        if (_impl->Open(filePath, &_errorLog, args)) {
             return true;
         }
     }

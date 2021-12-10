@@ -24,8 +24,9 @@
 /// \file alembicWriter.cpp
 
 #include "pxr/pxr.h"
-#include "pxr/usd/usdAbc/alembicWriter.h"
-#include "pxr/usd/usdAbc/alembicUtil.h"
+#include "pxr/usd/plugin/usdAbc/alembicWriter.h"
+#include "pxr/usd/plugin/usdAbc/alembicUtil.h"
+#include "pxr/usd/usdGeom/hermiteCurves.h"
 #include "pxr/usd/usdGeom/tokens.h"
 #include "pxr/usd/usdGeom/xformOp.h"
 #include "pxr/usd/sdf/schema.h"
@@ -33,7 +34,9 @@
 #include "pxr/base/trace/trace.h"
 #include "pxr/base/tf/enum.h"
 #include "pxr/base/tf/envSetting.h"
+#include "pxr/base/tf/fileUtils.h"
 #include "pxr/base/tf/ostreamMethods.h"
+#include "pxr/base/tf/pathUtils.h"
 #include <Alembic/Abc/OArchive.h>
 #include <Alembic/Abc/OObject.h>
 #include <Alembic/AbcGeom/OCamera.h>
@@ -1800,11 +1803,11 @@ _SampleForAlembic
 _CopyInterpolateBoundary(const VtValue& src)
 {
     const TfToken& value = src.UncheckedGet<TfToken>();
-    if (value.IsEmpty() || value == UsdGeomTokens->none) {
-        return _SampleForAlembic(int32_t(0));
-    }
-    if (value == UsdGeomTokens->edgeAndCorner) {
+    if (value.IsEmpty() || value == UsdGeomTokens->edgeAndCorner) {
         return _SampleForAlembic(int32_t(1));
+    }
+    if (value == UsdGeomTokens->none) {
+        return _SampleForAlembic(int32_t(0));
     }
     if (value == UsdGeomTokens->edgeOnly) {
         return _SampleForAlembic(int32_t(2));
@@ -1819,11 +1822,13 @@ _SampleForAlembic
 _CopyFaceVaryingInterpolateBoundary(const VtValue& src)
 {
     const TfToken& value = src.UncheckedGet<TfToken>();
-    if (value.IsEmpty() || value == UsdGeomTokens->all) {
-        return _SampleForAlembic(int32_t(0));
-    }
-    if (value == UsdGeomTokens->cornersPlus1) {
+    if (value.IsEmpty() || value == UsdGeomTokens->cornersPlus1 ||
+        value == UsdGeomTokens->cornersOnly ||
+        value == UsdGeomTokens->cornersPlus2) {
         return _SampleForAlembic(int32_t(1));
+    }
+    if (value == UsdGeomTokens->all) {
+        return _SampleForAlembic(int32_t(0));
     }
     if (value == UsdGeomTokens->none) {
         return _SampleForAlembic(int32_t(2));
@@ -1862,12 +1867,6 @@ _CopyCurveBasis(const VtValue& src)
     }
     if (value == UsdGeomTokens->catmullRom) {
         return _SampleForAlembic(kCatmullromBasis);
-    }
-    if (value == UsdGeomTokens->hermite) {
-        return _SampleForAlembic(kHermiteBasis);
-    }
-    if (value == UsdGeomTokens->power) {
-        return _SampleForAlembic(kPowerBasis);
     }
     return _ErrorSampleForAlembic(TfStringPrintf(
                             "Unsupported curve basis '%s'",
@@ -2516,12 +2515,15 @@ _WriteRoot(_PrimWriterContext* context)
 template <class T>
 static 
 bool _ExtractWithFallback(UsdSamples const &samples, double time,
-                          TfToken const &primType, TfToken const &propertyName,
+                          const UsdPrimDefinition *primDef, 
+                          TfToken const &propertyName,
                           T *val)
 {
     if (samples.IsEmpty()){
-        return UsdSchemaRegistry::HasField(primType, propertyName,
-                                           SdfFieldKeys->Default, val);
+        if (!primDef) {
+            return false;
+        }
+        return primDef->GetAttributeFallbackValue(propertyName, val);
     }
     
     const VtValue value = samples.Get(time);
@@ -2576,6 +2578,9 @@ _WriteCameraParameters(_PrimWriterContext* context)
         context->ExtractSamples(UsdGeomTokens->clippingRange,
                                 SdfValueTypeNames->Float2);
 
+    const UsdPrimDefinition *primDef =
+        UsdSchemaRegistry::GetInstance().FindConcretePrimDefinition(primType);
+
     // Copy all the samples to set up alembic camera frustum.
     typedef CameraSample SampleT;
     for (double time : context->GetSampleTimesUnion()) {
@@ -2586,7 +2591,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
             // Horizontal aperture is in cm in ABC, but mm in USD
             float value;
             if (_ExtractWithFallback(horizontalAperture, time, 
-                                     primType, 
+                                     primDef, 
                                      UsdGeomTokens->horizontalAperture,
                                      &value)){
                 sample.setHorizontalAperture(value / 10.0);
@@ -2597,7 +2602,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
             // Vertical aperture is in cm in ABC, but mm in USD
             float value;
             if (_ExtractWithFallback(verticalAperture, time, 
-                                     primType, UsdGeomTokens->verticalAperture,
+                                     primDef, UsdGeomTokens->verticalAperture,
                                      &value)){
                 sample.setVerticalAperture(value / 10.0);
             }
@@ -2607,7 +2612,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
             // Horizontal aperture is in cm in ABC, but mm in USD
             float value;
             if (_ExtractWithFallback(horizontalApertureOffset, time, 
-                                     primType, 
+                                     primDef, 
                                      UsdGeomTokens->horizontalApertureOffset,
                                      &value)){
                 sample.setHorizontalFilmOffset(value / 10.0);
@@ -2618,7 +2623,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
             // Vertical aperture is in cm in ABC, but mm in USD
             float value;
             if (_ExtractWithFallback(verticalApertureOffset, time, 
-                                     primType, 
+                                     primDef, 
                                      UsdGeomTokens->verticalApertureOffset,
                                      &value)){
                 sample.setVerticalFilmOffset(value / 10.0);
@@ -2629,7 +2634,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
             // Focal length in USD and ABC is both in mm
             float value;
             if (_ExtractWithFallback(focalLength, time, 
-                                     primType, UsdGeomTokens->focalLength,
+                                     primDef, UsdGeomTokens->focalLength,
                                      &value)){
                 sample.setFocalLength(value);
             }
@@ -2638,7 +2643,7 @@ _WriteCameraParameters(_PrimWriterContext* context)
         {
             GfVec2f value;
             if (_ExtractWithFallback(clippingRange, time, 
-                                     primType, UsdGeomTokens->clippingRange,
+                                     primDef, UsdGeomTokens->clippingRange,
                                      &value)){
                 sample.setNearClippingPlane(value[0]);
                 sample.setFarClippingPlane(value[1]);
@@ -3064,11 +3069,16 @@ _WriteSubD(_PrimWriterContext* context)
     MySampleT mySample;
     SampleT& sample = mySample;
     for (double time : context->GetSampleTimesUnion()) {
-        // Build the sample.  Usd defaults faceVaryingLinearInterpolation to
-        // edgeAndCorner but Alembic defaults to bilinear so set that first
-        // in case we have no opinion.
+        // Build the sample.  Usd defaults both interpolateBoundary and
+        // faceVaryingLinearInterpolation to edgeAndCorner (1 in both cases)
+        // but Alembic defaults to none (0) and bilinear (0) respectively,
+        // so set these first in case we have no opinion (converters will
+        // not be invoked and no value assigned if the Usd value is absent).
         sample.reset();
+
+        sample.setInterpolateBoundary(1);
         sample.setFaceVaryingInterpolateBoundary(1);
+
         _CopySelfBounds(time, extent, &sample);
         _SampleForAlembic alembicPositions =
         _Copy(schema,
@@ -3322,6 +3332,117 @@ _WriteBasisCurves(_PrimWriterContext* context)
 
 static
 void
+_WriteHermiteCurves(_PrimWriterContext* context)
+{
+    typedef OCurves Type;
+
+    const _WriterSchema& schema = context->GetSchema();
+
+    // Create the object and make it the parent.
+    shared_ptr<Type> object(new Type(context->GetParent(),
+                                     context->GetAlembicPrimName(),
+                                     _GetPrimMetadata(*context)));
+    context->SetParent(object);
+
+    // Collect the properties we need.
+    context->SetSampleTimesUnion(UsdAbc_TimeSamples());
+    UsdSamples extent =
+        context->ExtractSamples(UsdGeomTokens->extent,
+                                SdfValueTypeNames->Float3Array);
+    UsdSamples points =
+        context->ExtractSamples(UsdGeomTokens->points,
+                                SdfValueTypeNames->Point3fArray);
+    UsdSamples tangents =
+        context->ExtractSamples(UsdGeomTokens->tangents,
+                                SdfValueTypeNames->Vector3fArray);
+    UsdSamples velocities =
+        context->ExtractSamples(UsdGeomTokens->velocities,
+                                SdfValueTypeNames->Vector3fArray);
+    UsdSamples normals =
+        context->ExtractSamples(UsdGeomTokens->normals,
+                                SdfValueTypeNames->Normal3fArray);
+    UsdSamples curveVertexCounts =
+        context->ExtractSamples(UsdGeomTokens->curveVertexCounts,
+                                SdfValueTypeNames->IntArray);
+    UsdSamples widths =
+        context->ExtractSamples(UsdGeomTokens->widths,
+                                SdfValueTypeNames->FloatArray);
+    if (!velocities.IsEmpty()) {
+        // Velocities has the same shape as points / positions.
+        // In Abc positions encodes both points and tangents but in Usd, they
+        // are separate arrays. To address, we would either need to add
+        // tangentVelocities to the USD schema or provide alembic with
+        // 0 valued velocities for the tangent elements. Let's identify
+        // some use cases before figuring out how to handle this.
+        TF_WARN(
+            "Writing '%s' from HermiteCurves to AbcGeom::OCurvesSchema is "
+            "undefined.",
+            velocities.GetPath().GetText());
+    }
+
+    // Copy all the samples.
+    typedef Type::schema_type::Sample SampleT;
+    SampleT sample;
+    for (double time : context->GetSampleTimesUnion()) {
+        // Build the sample.
+        sample.reset();
+        _CopySelfBounds(time, extent, &sample);
+
+        // We need to interleave points and tangents to
+        // output to alembic's curve type for hermite curves.
+        VtValue pointsValue = points.Get(time);
+        VtValue tangentsValue = tangents.Get(time);
+        _SampleForAlembic alembicPoints;
+        if (auto pointsAndTangents =
+                UsdGeomHermiteCurves::PointAndTangentArrays(
+                    pointsValue.Get<VtVec3fArray>(),
+                    tangentsValue.Get<VtVec3fArray>())) {
+            // This is a copy of _Copy
+            static const int extent = P3fArraySample::traits_type::extent;
+            typedef PODTraitsFromEnum<
+                P3fArraySample::traits_type::pod_enum>::value_type P3fPodType;
+            typedef TypedArraySample<P3fArraySample::traits_type>
+                P3fAlembicSample;
+            typedef P3fArraySample::traits_type::value_type P3fValueType;
+            VtVec3fArray interleaved = pointsAndTangents.Interleave();
+            const SdfValueTypeName& usdType = SdfValueTypeNames->Point3fArray;
+            const _WriterSchema::Converter& converter =
+                schema.GetConverter(usdType);
+            alembicPoints = _MakeSample<P3fPodType, extent>(
+                schema, converter, usdType, VtValue(interleaved), false);
+
+            if (_CheckSample(alembicPoints, points, usdType)) {
+                sample.setPositions(
+                    P3fAlembicSample(alembicPoints.GetDataAs<P3fValueType>(),
+                                     alembicPoints.GetCount() / extent));
+            }
+        }
+        _SampleForAlembic alembicNormals =
+        _Copy<ON3fGeomParam::prop_type::traits_type>(schema,
+              time, normals,
+              &sample, &SampleT::setNormals);
+        _SampleForAlembic alembicCurveVertexCounts =
+        _Copy(schema,
+              time, curveVertexCounts,
+              &sample, &SampleT::setCurvesNumVertices);
+        _SampleForAlembic alembicWidths =
+        _Copy<OFloatGeomParam::prop_type::traits_type>(schema,
+              time, widths,
+              &sample, &SampleT::setWidths);
+        sample.setBasis(kHermiteBasis);
+        sample.setType(kCubic);
+        sample.setWrap(kNonPeriodic);
+        // Write the sample.
+        object->getSchema().set(sample);
+    }
+
+    // Set the time sampling.
+    object->getSchema().setTimeSampling(
+        context->AddTimeSampling(context->GetSampleTimesUnion()));
+}
+
+static
+void
 _WritePoints(_PrimWriterContext* context)
 {
     typedef OPoints Type;
@@ -3530,6 +3651,16 @@ _WriterSchemaBuilder::_WriterSchemaBuilder()
         .AppendWriter(_WriteUserProperties)
         .AppendWriter(_WriteOther)
         ;
+    schema.AddType(UsdAbcPrimTypeNames->HermiteCurves)
+        .AppendWriter(_WriteXformParent)
+        .AppendWriter(_WriteHermiteCurves)
+        .AppendWriter(_WriteMayaColor)
+        .AppendWriter(_WriteGprim)
+        .AppendWriter(_WriteImageable)
+        .AppendWriter(_WriteArbGeomParams)
+        .AppendWriter(_WriteUserProperties)
+        .AppendWriter(_WriteOther)
+        ;
     schema.AddType(UsdAbcPrimTypeNames->Points)
         .AppendWriter(_WriteXformParent)
         .AppendWriter(_WritePoints)
@@ -3603,6 +3734,13 @@ UsdAbc_AlembicDataWriter::Open(
     TRACE_FUNCTION();
 
     _errorLog.clear();
+
+    const std::string dir = TfGetPathName(filePath);
+    if (!dir.empty() && !TfIsDir(dir) && !TfMakeDirs(dir)) {
+        TF_RUNTIME_ERROR("Could not create directory '%s'", dir.c_str());
+        return false;
+    }
+
     try {
         _impl->SetArchive(
             CreateArchiveWithInfo(Alembic::AbcCoreOgawa::WriteArchive(),

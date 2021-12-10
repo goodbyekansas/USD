@@ -21,17 +21,17 @@
 // KIND, either express or implied. See the Apache License for the specific
 // language governing permissions and limitations under the Apache License.
 //
-#ifndef HDEMBREE_RENDER_DELEGATE_H
-#define HDEMBREE_RENDER_DELEGATE_H
+#ifndef PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_DELEGATE_H
+#define PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_DELEGATE_H
 
 #include "pxr/pxr.h"
 #include "pxr/imaging/hd/renderDelegate.h"
 #include "pxr/imaging/hd/renderThread.h"
-#include "pxr/imaging/hdEmbree/renderer.h"
+#include "pxr/imaging/plugin/hdEmbree/renderer.h"
 #include "pxr/base/tf/staticTokens.h"
 
 #include <mutex>
-#include <embree2/rtcore.h>
+#include <embree3/rtcore.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -71,14 +71,15 @@ TF_DECLARE_PUBLIC_TOKENS(HdEmbreeRenderSettingsTokens, HDEMBREE_RENDER_SETTINGS_
 ///
 /// HdEmbree Rprims create embree geometry objects in the render delegate's
 /// top-level embree scene; and HdEmbree's render pass draws by casting rays
-/// into the top-level scene. The renderpass writes to the currently bound GL
-/// framebuffer.
+/// into the top-level scene. The renderpass writes to renderbuffers, which
+/// are then composited into the GL framebuffer.
 ///
 /// The render delegate also has a hook for the main hydra execution algorithm
 /// (HdEngine::Execute()): between HdRenderIndex::SyncAll(), which pulls new
 /// scene data, and execution of tasks, the engine calls back to
-/// CommitResources(). This can be used to commit GPU buffers or, in HdEmbree's
-/// case, to do a final build of the BVH.
+/// CommitResources(). This can be used to commit GPU buffers, or as a place to
+/// schedule a final BVH build (though Embree doesn't currenlty use it).
+/// Importantly, no scene updates are processed after CommitResources().
 ///
 class HdEmbreeRenderDelegate final : public HdRenderDelegate {
 public:
@@ -143,16 +144,13 @@ public:
     ///                   instancer.
     ///   \param id The scene graph ID of this instancer, used when pulling
     ///             data from a scene delegate.
-    ///   \param instancerId If specified, the instancer at this id uses
-    ///                      this instancer as a prototype.
     ///   \return An embree instancer object.
     virtual HdInstancer *CreateInstancer(HdSceneDelegate *delegate,
-                                         SdfPath const& id,
-                                         SdfPath const& instancerId);
+                                         SdfPath const& id) override;
 
     /// Destroy an instancer created with CreateInstancer.
     ///   \param instancer The instancer to be destroyed.
-    virtual void DestroyInstancer(HdInstancer *instancer);
+    virtual void DestroyInstancer(HdInstancer *instancer) override;
 
     /// Create a hydra Rprim, representing scene geometry. This class creates
     /// embree-specialized geometry containers like HdEmbreeMesh which map
@@ -161,12 +159,9 @@ public:
     ///                 from GetSupportedRprimTypes().
     ///   \param rprimId The scene graph ID of this rprim, used when pulling
     ///                  data from a scene delegate.
-    ///   \param instancerId If specified, the instancer at this id uses the
-    ///                      new rprim as a prototype.
     ///   \return An embree rprim object.
     virtual HdRprim *CreateRprim(TfToken const& typeId,
-                                 SdfPath const& rprimId,
-                                 SdfPath const& instancerId) override;
+                                 SdfPath const& rprimId) override;
 
     /// Destroy an Rprim created with CreateRprim.
     ///   \param rPrim The rprim to be destroyed.
@@ -285,10 +280,10 @@ private:
 
     // A callback that interprets embree error codes and injects them into
     // the hydra logging system.
-    static void HandleRtcError(const RTCError code, const char *msg);
+    static void HandleRtcError(void* userPtr, RTCError code, const char *msg);
 };
 
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-#endif // HDEMBREE_RENDER_DELEGATE_H
+#endif // PXR_IMAGING_PLUGIN_HD_EMBREE_RENDER_DELEGATE_H

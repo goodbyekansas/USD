@@ -46,7 +46,9 @@ def GetUsdLayerMetaData(filePath):
 
 def GetFlattenedUsdData(filePath, populationMaskPaths):
     from pxr import Ar, Usd
-    Ar.GetResolver().ConfigureResolverForAsset(filePath)
+
+    if hasattr(Ar.Resolver, "ConfigureResolverForAsset"):
+        Ar.GetResolver().ConfigureResolverForAsset(filePath)
     popMask = (None if populationMaskPaths is None
                else Usd.StagePopulationMask())
     if popMask:
@@ -58,7 +60,9 @@ def GetFlattenedUsdData(filePath, populationMaskPaths):
 
 def GetFlattenedLayerStack(filePath):
     from pxr import Ar, Sdf, Pcp, Usd, UsdUtils
-    Ar.GetResolver().ConfigureResolverForAsset(filePath)
+
+    if hasattr(Ar.Resolver, "ConfigureResolverForAsset"):
+        Ar.GetResolver().ConfigureResolverForAsset(filePath)
     stage = Usd.Stage.Open(filePath, Usd.Stage.LoadNone)
     return UsdUtils.FlattenLayerStack(stage)
 
@@ -72,7 +76,7 @@ def main():
         '-o', '--out', metavar='file', action='store',
         help='Write a single input file to this output file instead of stdout.')
     parser.add_argument(
-        '--usdFormat', metavar='usda|usdb|usdc', action='store',
+        '--usdFormat', metavar='usda|usdc', action='store',
         help="Use this underlying file format "
         "for output files with the extension 'usd'.  For example, passing "
         "'-o output.usd --usdFormat usda' will create output.usd as a text "

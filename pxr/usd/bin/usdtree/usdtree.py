@@ -288,11 +288,12 @@ Special metadata "kind" and "active" are always shown if authored unless --simpl
     resolver = Ar.GetResolver()
 
     try:
-        resolver.ConfigureResolverForAsset(args.inputPath)
+        if hasattr(Ar.Resolver, "ConfigureResolverForAsset"):
+            resolver.ConfigureResolverForAsset(args.inputPath)
         resolverContext = resolver.CreateDefaultContextForAsset(args.inputPath)
         with Ar.ResolverContextBinder(resolverContext):
             resolved = resolver.Resolve(args.inputPath)
-            if not resolved or not os.path.exists(resolved):
+            if not resolved:
                 _Err('Cannot resolve inputPath %r'%resolved)
                 return 1
             PrintTree(args, resolved)

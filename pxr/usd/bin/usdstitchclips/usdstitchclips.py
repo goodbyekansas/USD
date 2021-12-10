@@ -22,6 +22,9 @@
 # KIND, either express or implied. See the Apache License for the specific
 # language governing permissions and limitations under the Apache License.
 #
+
+from __future__ import print_function
+
 import argparse, os, sys
 from pxr import UsdUtils, Sdf, Tf 
 
@@ -39,7 +42,7 @@ parser = argparse.ArgumentParser( \
 
 parser.add_argument('usdFiles', nargs='+')
 parser.add_argument('-o', '--out', action='store',
-                    help='specify the filename for the top-level result file, which also serves as base-name for the topology file.')
+                    help='specify the filename for the top-level result file, which also serves as base-name for the topology and manifest files.')
 parser.add_argument('-c', '--clipPath', action='store',
                     help='specify a prim path at which to begin stitching clip data.')
 parser.add_argument('-s', '--startTimeCode', action='store',
@@ -56,6 +59,10 @@ parser.add_argument('--clipSet', action='store',
                     help='specify a named clipSet in which to author clip metadata, so that multiple sets of clips can be applied on the same prim.')
 parser.add_argument('--activeOffset', action='store', required=False,
                     help='specify an offset for template-based clips, offsetting the frame number of each clip file.')
+parser.add_argument('--interpolateMissingClipValues', action='store_true',
+                    help=('specify whether values for clips without authored '
+                          'samples are interpolated from surrounding clips '
+                          'if no default value is authored in any clip.'))
 # useful for debugging with diffs
 parser.add_argument('-n', '--noComment', action='store_true',
                     help='do not write a comment specifying how the usd file was generated')
@@ -67,7 +74,7 @@ assert results.clipPath is not None, "must specify a clip path(--clipPath)"
 assert results.usdFiles is not None, "must specify clip files"
 
 if os.path.isfile(results.out):
-    print "Warning: merging with current result layer"
+    print("Warning: merging with current result layer")
 
 outLayerGenerated = False
 topologyLayerGenerated = False
@@ -84,6 +91,12 @@ try:
     if not topologyLayer:
         topologyLayerGenerated = True
         topologyLayer = Sdf.Layer.CreateNew(topologyLayerName)
+
+    manifestLayerName = UsdUtils.GenerateClipManifestName(results.out)
+    manifestLayer = Sdf.Layer.FindOrOpen(manifestLayerName)
+    if not manifestLayer:
+        manifestLayerGenerated = True
+        manifestLayer = Sdf.Layer.CreateNew(manifestLayerName)
 
     if results.startTimeCode:
         results.startTimeCode = float(results.startTimeCode)
@@ -109,14 +122,18 @@ try:
         _checkMissingTemplateArg('stride', results.stride)
 
         UsdUtils.StitchClipsTopology(topologyLayer, results.usdFiles)
+        UsdUtils.StitchClipsManifest(manifestLayer, topologyLayer, 
+                                     results.usdFiles, results.clipPath)
         UsdUtils.StitchClipsTemplate(outLayer, 
                                      topologyLayer,
+                                     manifestLayer,
                                      results.clipPath,
                                      results.templatePath,
                                      results.startTimeCode,
                                      results.endTimeCode,
                                      results.stride,
                                      results.activeOffset,
+                                     results.interpolateMissingClipValues,
                                      results.clipSet)
     else:
         if results.templatePath:
@@ -131,6 +148,7 @@ try:
 
         UsdUtils.StitchClips(outLayer, results.usdFiles, results.clipPath, 
                              results.startTimeCode, results.endTimeCode,
+                             results.interpolateMissingClipValues,
                              results.clipSet)
 
 
@@ -144,4 +162,6 @@ except Tf.ErrorException as e:
         os.remove(results.out)
     if topologyLayerGenerated and os.path.isfile(topologyLayerName):
         os.remove(topologyLayerName)
+    if manifestLayerGenerated and os.path.isfile(manifestLayerName):
+        os.remove(manifestLayerName)
     sys.exit(e)

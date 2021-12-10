@@ -60,8 +60,8 @@ class UsdSchemaExamplesSimple : public UsdTyped
 public:
     /// Compile time constant representing what kind of schema this class is.
     ///
-    /// \sa UsdSchemaType
-    static const UsdSchemaType schemaType = UsdSchemaType::AbstractTyped;
+    /// \sa UsdSchemaKind
+    static const UsdSchemaKind schemaKind = UsdSchemaKind::AbstractTyped;
 
     /// Construct a UsdSchemaExamplesSimple on UsdPrim \p prim .
     /// Equivalent to UsdSchemaExamplesSimple::Get(prim.GetStage(), prim.GetPath())
@@ -106,11 +106,11 @@ public:
 
 
 protected:
-    /// Returns the type of schema this class belongs to.
+    /// Returns the kind of schema this class belongs to.
     ///
-    /// \sa UsdSchemaType
+    /// \sa UsdSchemaKind
     USDSCHEMAEXAMPLES_API
-    UsdSchemaType _GetSchemaType() const override;
+    UsdSchemaKind _GetSchemaKind() const override;
 
 private:
     // needs to invoke _GetStaticTfType.
@@ -130,10 +130,11 @@ public:
     // --------------------------------------------------------------------- //
     /// An integer attribute with fallback value of 0.
     ///
-    /// \n  C++ Type: int
-    /// \n  Usd Type: SdfValueTypeNames->Int
-    /// \n  Variability: SdfVariabilityVarying
-    /// \n  Fallback Value: 0
+    /// | ||
+    /// | -- | -- |
+    /// | Declaration | `int intAttr = 0` |
+    /// | C++ Type | int |
+    /// | \ref Usd_Datatypes "Usd Type" | SdfValueTypeNames->Int |
     USDSCHEMAEXAMPLES_API
     UsdAttribute GetIntAttrAttr() const;
 

@@ -9,10 +9,6 @@ endif()
 set(optionalLibs "")
 set(optionalIncludeDirs "")
 
-if (PXR_ENABLE_MULTIVERSE_SUPPORT)
-    add_definitions(-DPXR_MULTIVERSE_SUPPORT_ENABLED)
-endif()
-
 if (PXR_ENABLE_HDF5_SUPPORT)
    add_definitions(-DPXR_HDF5_SUPPORT_ENABLED)
    list(APPEND optionalLibs ${HDF5_LIBRARIES} ${HDF5_HL_LIBRARIES})
@@ -27,8 +23,10 @@ pxr_plugin(usdAbc
         usd
         usdGeom
         ${ALEMBIC_LIBRARIES}
-        ${OPENEXR_Iex_LIBRARY}
-        ${OPENEXR_Half_LIBRARY}
+        ${OPENEXR_Half_LIBRARY} 
+        ${OPENEXR_Imath_LIBRARY} 
+        ${OPENEXR_Iex_LIBRARY} 
+        ${OPENEXR_IexMath_LIBRARY}
         ${optionalLibs}
 
     INCLUDE_DIRS
@@ -59,6 +57,9 @@ pxr_plugin(usdAbc
 
     RESOURCE_FILES
         plugInfo.json
+
+    DOXYGEN_FILES
+        overview.dox
 )
 
 pxr_test_scripts(
@@ -70,8 +71,11 @@ pxr_test_scripts(
     testenv/testUsdAbcFaceset.py
     testenv/testUsdAbcIndexedProperties.py
     testenv/testUsdAbcInstancing.py
+    testenv/testUsdAbcIsConstant.py
+    testenv/testUsdAbcP_OldEncoding.py
     testenv/testUsdAbcUvReadWrite.py
     testenv/testUsdAbcUvReadWrite_OldEncoding.py
+    testenv/testUsdAbcSDFArguments.py
 )
 
 pxr_install_test_dir(
@@ -130,6 +134,16 @@ pxr_install_test_dir(
 )
 
 pxr_install_test_dir(
+    SRC testenv/testUsdAbcIsConstant
+    DEST testUsdAbcIsConstant
+)
+
+pxr_install_test_dir(
+    SRC testenv/testUsdAbcP_OldEncoding
+    DEST testUsdAbcP_OldEncoding
+)
+
+pxr_install_test_dir(
     SRC testenv/testUsdAbcUvReadWrite
     DEST testUsdAbcUvReadWrite
 )
@@ -137,6 +151,11 @@ pxr_install_test_dir(
 pxr_install_test_dir(
     SRC testenv/testUsdAbcUvReadWrite_OldEncoding
     DEST testUsdAbcUvReadWrite_OldEncoding
+)
+
+pxr_install_test_dir(
+    SRC testenv/testUsdAbcSDFArguments
+    DEST testUsdAbcSDFArguments
 )
 
 pxr_register_test(testUsdAbcAlembicData
@@ -225,13 +244,24 @@ pxr_register_test(testUsdAbcInstancingNinst
         USD_ABC_DISABLE_INSTANCING=1
 )
 
+pxr_register_test(testUsdAbcIsConstant
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdAbcIsConstant"
+    EXPECTED_RETURN_CODE 0
+)
+
+pxr_register_test(testUsdAbcP_OldEncoding
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdAbcP_OldEncoding"
+    EXPECTED_RETURN_CODE 0
+)
+
 pxr_register_test(testUsdAbcUvReadWrite
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdAbcUvReadWrite"
     EXPECTED_RETURN_CODE 0
     ENV
         USD_ABC_WRITE_UV_AS_ST_TEXCOORD2FARRAY=1
-        USD_ABC_READ_FLOAT2ARRAY_ST_PRIMVARS=0
 )
 
 pxr_register_test(testUsdAbcUvReadWrite_OldEncoding
@@ -240,5 +270,10 @@ pxr_register_test(testUsdAbcUvReadWrite_OldEncoding
     EXPECTED_RETURN_CODE 0
     ENV
         USD_ABC_WRITE_UV_AS_ST_TEXCOORD2FARRAY=0
-        USD_ABC_READ_FLOAT2ARRAY_ST_PRIMVARS=1
+)
+
+pxr_register_test(testUsdAbcSDFArguments
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testUsdAbcSDFArguments"
+    EXPECTED_RETURN_CODE 0
 )
