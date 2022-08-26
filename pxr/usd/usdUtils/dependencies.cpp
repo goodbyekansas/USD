@@ -672,8 +672,28 @@ public:
             auto &fileAnalyzer = destFilePathAndAnalyzer.second;
 
             if (!fileAnalyzer.GetLayer()) {
-                _fileCopyMap.emplace_back(fileAnalyzer.GetFilePath(),
-                                          destFilePath);
+                const std::string srcFilePath = fileAnalyzer.GetFilePath();
+                if (TfStringContains(srcFilePath, "<UDIM>")) {
+                    // Special case for UDIMs to glob for UDIM numbers
+                    const std::string::size_type udimPos = 
+                        srcFilePath.find("<UDIM>");
+                    const std::string globPath = TfStringReplace(
+                        srcFilePath, "<UDIM>", "*");
+
+                    const std::vector<std::string> udimPaths = TfGlob(globPath);
+                    for (auto &udimPath : udimPaths) {
+                        // TfGlob returns search path if none found
+                        if (udimPath == globPath)
+                            break;
+
+                        const std::string destUdimPath = TfStringReplace(
+                            destFilePath, "<UDIM>", udimPath.substr(udimPos, 4));
+                        _fileCopyMap.emplace_back(udimPath, destUdimPath);
+                    }
+                } else {
+                    _fileCopyMap.emplace_back(srcFilePath, destFilePath);
+                }
+                
                 continue;
             }
 
@@ -699,9 +719,16 @@ public:
                     ref = ArSplitPackageRelativePathOuter(ref).first;
                 }
 
-                const std::string refAssetPath = 
+                std::string refAssetPath = 
                         SdfComputeAssetPathRelativeToLayer(
                             fileAnalyzer.GetLayer(), ref);
+
+                std::string baseName = "";
+                // UDIMs special case: remove filename and resolve dir instead
+                if (TfStringContains(refAssetPath, "<UDIM>")) {
+                    baseName = TfGetBaseName(refAssetPath);
+                    refAssetPath = TfGetPathName(refAssetPath);
+                }
 
                 std::string resolvedRefFilePath = resolver.Resolve(refAssetPath);
 
@@ -726,6 +753,10 @@ public:
                         refAssetPath.c_str(), resolvedRefFilePath.c_str());
                     continue;
                 }
+
+                // Reform path if UDIM was used
+                if (!baseName.empty())
+                    resolvedRefFilePath = TfStringCatPaths(resolvedRefFilePath, baseName);
 #endif
 
                 // Check if this dependency must skipped.

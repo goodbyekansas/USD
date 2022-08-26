@@ -947,7 +947,7 @@ JPEG = Dependency("JPEG", InstallJPEG, "include/jpeglib.h")
 ############################################################
 # TIFF
 
-TIFF_URL = "https://gitlab.com/libtiff/libtiff/-/archive/Release-v4-0-7/libtiff-Release-v4-0-7.tar.gz"
+TIFF_URL = "https://gitlab.com/libtiff/libtiff/-/archive/v4.0.7/libtiff-v4.0.7.tar.gz"
 
 def InstallTIFF(context, force, buildArgs):
     with CurrentWorkingDirectory(DownloadURL(TIFF_URL, context, force)):
@@ -1523,6 +1523,11 @@ def InstallUSD(context, force, buildArgs):
         else:
             extraArgs.append('-DPXR_BUILD_USDVIEW=OFF')
 
+        if context.buildAR2:
+            extraArgs.append("-DPXR_USE_AR_2=ON")
+        else:
+            extraArgs.append("-DPXR_USE_AR_2=OFF")
+
         if context.buildAlembic:
             extraArgs.append('-DPXR_BUILD_ALEMBIC_PLUGIN=ON')
             if context.enableHDF5:
@@ -1852,6 +1857,14 @@ subgroup.add_argument("--materialx", dest="build_materialx", action="store_true"
 subgroup.add_argument("--no-materialx", dest="build_materialx", action="store_false",
                       help="Do not build MaterialX plugin for USD (default)")
 
+group = parser.add_argument_group(title="ArResolver Options")
+subgroup = group.add_mutually_exclusive_group()
+subgroup.add_argument("--AR2", dest="buildAR2", action="store_false",
+                      default=False,
+                      help="build for AR2.0")
+subgroup.add_argument("--no-AR2", dest="buildAR2", action="store_false",
+                      help="Do not build for AR2.0 (default)")
+
 args = parser.parse_args()
 
 class InstallContext:
@@ -1979,6 +1992,8 @@ class InstallContext:
 
         # - MaterialX Plugin
         self.buildMaterialX = args.build_materialx
+
+        self.buildAR2 = args.buildAR2
 
     def GetBuildArguments(self, dep):
         return self.buildArgs.get(dep.name.lower(), [])
@@ -2205,6 +2220,7 @@ summaryMsg += """\
       HDF5 support:             {enableHDF5}
     Draco Plugin                {buildDraco}
     MaterialX Plugin            {buildMaterialX}
+    Build AR2.0                 {buildAR2}
 
   Dependencies                  {dependencies}"""
 
@@ -2263,6 +2279,7 @@ summaryMsg = summaryMsg.format(
     buildAlembic=("On" if context.buildAlembic else "Off"),
     buildDraco=("On" if context.buildDraco else "Off"),
     buildMaterialX=("On" if context.buildMaterialX else "Off"),
+    buildAR2=("On" if context.buildAR2 else "Off"),
     enableHDF5=("On" if context.enableHDF5 else "Off"))
 
 Print(summaryMsg)
